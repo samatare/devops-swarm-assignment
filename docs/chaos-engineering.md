@@ -1,45 +1,56 @@
-# BONUS: Chaos Engineering - Simulating Node Failures
+# BONUS: Chaos Engineering — Simulating Node Failures
 
-## Test 1: Drain a Worker Node
+## Test 1: Kill a Worker Node
 
-Simulate swarm-worker2 going down by draining it:
+Simulate swarm-worker2 going down:
 
-    docker node update --availability drain swarm-worker2
+```bash
+# Drain the node (simulates failure)
+docker node update --availability drain swarm-worker2
 
-Watch services redistribute to other nodes:
+# Watch services redistribute
+watch docker service ps app_backend
 
-    docker service ps app_backend --filter desired-state=running
+# Expected: All backend replicas move to swarm-worker1
+# Frontend replicas also redistribute
 
-Expected: All backend replicas move to swarm-worker1.
+# Restore
+docker node update --availability active swarm-worker2
 
-Restore the node:
+```
 
-    docker node update --availability active swarm-worker2
+## Test 2: Kill Backend Containers
+worker 1
+worker 2 
+172.31.36.184
+172.31.44.44
+```bash
+# SSH to a worker and kill all backend containers
+ssh 172.31.36.184 "docker kill \$(docker ps -q -f name=app_backend)"
 
-## Test 2: Kill Backend Containers on a Worker
+# Watch Swarm auto-heal
+watch docker service ps app_backend --filter desired-state=running
 
-Find which worker has backend containers:
+# Expected: Swarm detects missing tasks and schedules replacements
+```
 
-    docker service ps app_backend --format "table {{.Name}}\t{{.Node}}" --filter desired-state=running
+## Test 3: Simulate Network Partition
 
-SSH to that worker and kill the containers:
+```bash
+# On worker2, block traffic to manager (simulates network split)
+ssh swarm-worker2 "sudo iptables -A INPUT -s MANAGER_PRIVATE_IP -j DROP"
 
-    ssh -i ~/.ssh/swarm-key ubuntu@WORKER_PRIVATE_IP "docker kill \$(docker ps -q -f name=app_backend)"
+# Check node status from manager
+docker node ls
+# worker2 should show "Down" after ~30 seconds
 
-Watch Swarm auto-heal (new containers replace killed ones within seconds):
-
-    watch docker service ps app_backend --filter desired-state=running
-
-## Test 3: Verify Self-Healing
-
-After killing containers or draining nodes:
-
-    docker stack services app
-
-Expected: All services return to full replica count (3/3, 1/1) automatically.
+# Restore
+ssh swarm-worker2 "sudo iptables -D INPUT -s MANAGER_PRIVATE_IP -j DROP"
+```
 
 ## Results
 
+Swarm self-healing demonstrated:
 - Tasks automatically rescheduled when node is drained
-- Killed containers replaced within 10-15 seconds
-- No manual intervention needed - Swarm self-heals
+- Killed containers are replaced within seconds
+- Partitioned nodes detected within 30 seconds
