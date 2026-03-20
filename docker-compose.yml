@@ -115,6 +115,15 @@ services:
         - "traefik.http.middlewares.sec-headers.headers.contentTypeNosniff=true"
         - "traefik.http.middlewares.sec-headers.headers.frameDeny=true"
         - "traefik.http.routers.frontend.middlewares=sec-headers"
+        # --- HOST-BASED ROUTING (requires DNS, not available with raw IPs) ---
+        # To route by domain name instead of path, replace PathPrefix with Host:
+        #   - "traefik.http.routers.frontend.rule=Host(`app.example.com`)"
+        #   - "traefik.http.routers.backend.rule=Host(`api.example.com`)"
+        # Multiple domains on same cluster:
+        #   - "traefik.http.routers.blog.rule=Host(`blog.example.com`)"
+        #   - "traefik.http.routers.admin.rule=Host(`admin.example.com`)"
+        # Combine host + path:
+        #   - "traefik.http.routers.backend.rule=Host(`app.example.com`) && PathPrefix(`/api`)"
     logging:
       driver: json-file
       options:
