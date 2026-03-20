@@ -12,5 +12,14 @@ spec:
         - name: backend
           image: "{{ .Values.backend.image }}:{{ .Values.backend.tag }}"
           ports: [{ containerPort: 3000 }]
-          livenessProbe: { httpGet: { path: /health, port: 3000 }, initialDelaySeconds: 20 }
-          readinessProbe: { httpGet: { path: /health, port: 3000 }, initialDelaySeconds: 10 }
+          envFrom: [{ secretRef: { name: app-secrets } }, { configMapRef: { name: app-config } }]
+          resources:
+            requests: { cpu: "{{ .Values.backend.resources.requests.cpu }}", memory: "{{ .Values.backend.resources.requests.memory }}" }
+            limits: { cpu: "{{ .Values.backend.resources.limits.cpu }}", memory: "{{ .Values.backend.resources.limits.memory }}" }
+          livenessProbe: { httpGet: { path: /health, port: 3000 }, initialDelaySeconds: 20, periodSeconds: 10 }
+          readinessProbe: { httpGet: { path: /health, port: 3000 }, initialDelaySeconds: 10, periodSeconds: 5 }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: { matchLabels: { app: backend } }

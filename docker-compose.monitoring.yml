@@ -2,40 +2,61 @@ version: "3.9"
 services:
   prometheus:
     image: prom/prometheus:v2.51.0
-    command: ["--config.file=/etc/prometheus/prometheus.yml","--storage.tsdb.path=/prometheus","--storage.tsdb.retention.time=15d","--web.enable-lifecycle"]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
     volumes: [prometheus-data:/prometheus]
     configs:
       - { source: prom-config, target: /etc/prometheus/prometheus.yml }
       - { source: alert-rules, target: /etc/prometheus/alert-rules.yml }
     networks: [monitor]
-    deploy: { replicas: 1, placement: { constraints: [node.role == manager] } }
+    deploy:
+      replicas: 1
+      placement: { constraints: [node.role == manager] }
+      resources: { limits: { cpus: "1.0", memory: 1G } }
+
   grafana:
     image: grafana/grafana:10.4.0
-    environment: [GF_SECURITY_ADMIN_PASSWORD=admin, GF_USERS_ALLOW_SIGN_UP=false]
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
     volumes: [grafana-data:/var/lib/grafana]
     networks: [monitor, public]
-    deploy: { replicas: 1, labels: ["traefik.enable=true","traefik.http.routers.grafana.rule=Host(`grafana.localhost`)","traefik.http.services.grafana.loadbalancer.server.port=3000"] }
+    deploy:
+      replicas: 1
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.grafana.rule=Host(`grafana.localhost`)"
+        - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+
   node-exporter:
     image: prom/node-exporter:v1.7.0
-    volumes: ["/proc:/host/proc:ro","/sys:/host/sys:ro","/:/rootfs:ro"]
-    command: ["--path.procfs=/host/proc","--path.rootfs=/rootfs","--path.sysfs=/host/sys"]
+    volumes: ["/proc:/host/proc:ro", "/sys:/host/sys:ro", "/:/rootfs:ro"]
+    command: ["--path.procfs=/host/proc", "--path.rootfs=/rootfs", "--path.sysfs=/host/sys"]
     networks: [monitor]
-    deploy: { mode: global }
+    deploy: { mode: global, resources: { limits: { cpus: "0.20", memory: 128M } } }
+
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
-    volumes: ["/:/rootfs:ro","/var/run:/var/run:ro","/sys:/sys:ro","/var/lib/docker/:/var/lib/docker:ro"]
+    volumes: ["/:/rootfs:ro", "/var/run:/var/run:ro", "/sys:/sys:ro", "/var/lib/docker/:/var/lib/docker:ro"]
     networks: [monitor]
-    deploy: { mode: global }
+    deploy: { mode: global, resources: { limits: { cpus: "0.30", memory: 256M } } }
+
   alertmanager:
     image: prom/alertmanager:v0.27.0
     configs: [{ source: am-config, target: /etc/alertmanager/alertmanager.yml }]
     networks: [monitor]
     deploy: { replicas: 1 }
+
 configs:
   prom-config: { file: ./monitoring/prometheus/prometheus.yml }
   alert-rules: { file: ./monitoring/prometheus/alert-rules.yml }
   am-config:   { file: ./monitoring/alertmanager/alertmanager.yml }
+
 volumes: { prometheus-data: {}, grafana-data: {} }
+
 networks:
   monitor: { driver: overlay, driver_opts: { encrypted: "true" } }
   public:  { external: true, name: app_public }

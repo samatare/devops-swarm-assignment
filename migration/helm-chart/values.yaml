@@ -1,0 +1,30 @@
+frontend:
+  image: ghcr.io/yourorg/frontend
+  tag: latest
+  replicas: 3
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+backend:
+  image: ghcr.io/yourorg/backend
+  tag: latest
+  replicas: 3
+  resources:
+    requests: { cpu: 250m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
+postgres:
+  image: postgres
+  tag: "15-alpine"
+  storage: 10Gi
+redis:
+  image: redis
+  tag: "7-alpine"
+  maxMemory: 128mb
+ingress:
+  enabled: true
+  host: app.example.com
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPU: 70

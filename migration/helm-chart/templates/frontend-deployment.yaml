@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: frontend }
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } }
+  selector: { matchLabels: { app: frontend } }
+  template:
+    metadata: { labels: { app: frontend } }
+    spec:
+      containers:
+        - name: frontend
+          image: "{{ .Values.frontend.image }}:{{ .Values.frontend.tag }}"
+          ports: [{ containerPort: 3000 }]
+          resources:
+            requests: { cpu: "{{ .Values.frontend.resources.requests.cpu }}", memory: "{{ .Values.frontend.resources.requests.memory }}" }
+            limits: { cpu: "{{ .Values.frontend.resources.limits.cpu }}", memory: "{{ .Values.frontend.resources.limits.memory }}" }
+          livenessProbe: { httpGet: { path: /, port: 3000 }, initialDelaySeconds: 15 }
+          readinessProbe: { httpGet: { path: /, port: 3000 }, initialDelaySeconds: 5 }
