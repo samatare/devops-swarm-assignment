@@ -1,94 +1,161 @@
+# =============================================================================
+# Production Docker Swarm Stack — Senior DevOps Assignment
+# =============================================================================
+# Services: Traefik (LB), Frontend (nginx), Backend (nginx), PostgreSQL, Redis
+# Networks: public (ingress), frontend (FE-BE), backend (BE-DB), monitor
+# Secrets:  db_password, db_user, db_connection_string, api_key
+#
+# Prerequisites:
+#   1. ./scripts/create-secrets.sh
+#   2. docker network create --driver overlay --opt encrypted=true monitor
+#
+# Deploy:   docker stack deploy -c docker-compose.yml app
+# Remove:   docker stack rm app
+# =============================================================================
+
 version: "3.9"
 
 services:
+
+  # ===========================================================================
+  # TRAEFIK — Reverse Proxy & Load Balancer
+  # ===========================================================================
+  # Why Traefik v2.11?
+  #   - Native Swarm service discovery via Docker labels
+  #   - v2.11 respects DOCKER_API_VERSION (v3.x does not)
+  #   - Docker Engine 29 requires API >= 1.40
+  # Why not Nginx? Traefik auto-discovers services, no manual upstream config
+  # ===========================================================================
   traefik:
     image: traefik:v2.11
     environment:
-      - DOCKER_API_VERSION=1.45
+      - DOCKER_API_VERSION=1.45        # Docker Engine 29 requires >= 1.40
     command:
-      - "--api.dashboard=true"
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.swarmMode=true"
-      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
-      - "--providers.docker.exposedByDefault=false"
-      - "--providers.docker.network=app_public"
-      - "--entryPoints.web.address=:80"
-      - "--metrics.prometheus=true"
-      - "--entryPoints.metrics.address=:8082"
-      - "--log.level=INFO"
+      - "--api.dashboard=true"                                    # Enable dashboard
+      - "--api.insecure=true"                                     # No auth on dashboard (disable in prod)
+      - "--providers.docker=true"                                 # Docker as provider
+      - "--providers.docker.swarmMode=true"                       # Swarm mode (v2 syntax)
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock" # Service discovery via socket
+      - "--providers.docker.exposedByDefault=false"               # Only route opt-in services
+      - "--providers.docker.network=app_public"                   # Route via public network
+      # NOTE: Swarm prefixes network names: "public" becomes "app_public"
+      - "--entryPoints.web.address=:80"                           # HTTP entrypoint
+      # SSL disabled — Let's Encrypt requires domain name, not raw IP
+      - "--metrics.prometheus=true"                               # Expose /metrics
+      - "--entryPoints.metrics.address=:8082"                     # Metrics port
+      - "--log.level=INFO"                                        # Logging level
     ports:
-      - "80:80"
-      - "8080:8080"
+      - "80:80"          # HTTP — uses Swarm ingress mesh (accessible from any node)
+      - "8080:8080"      # Dashboard — restrict via security group in production
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks: [public]
+      - /var/run/docker.sock:/var/run/docker.sock:ro   # Read-only for security
+    networks:
+      - public
     deploy:
       replicas: 1
       placement:
-        constraints: [node.role == manager]
+        constraints:
+          - node.role == manager    # Only managers have Docker socket access
       resources:
         limits:   { cpus: "0.50", memory: 256M }
         reservations: { cpus: "0.25", memory: 128M }
 
+  # ===========================================================================
+  # FRONTEND — Web Application (nginx:alpine placeholder)
+  # ===========================================================================
+  # Placeholder image — replace with your Next.js/React image in production:
+  #   docker service update --image ghcr.io/yourorg/frontend:v1 app_frontend
+  # nginx serves on port 80, Traefik routes "/" here
+  # ===========================================================================
   frontend:
     image: nginx:alpine
-    networks: [public, frontend]
+    networks:
+      - public       # Traefik routes traffic here
+      - frontend     # Communicates with backend
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:80"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      interval: 15s       # Check every 15 seconds
+      timeout: 5s         # Fail if no response in 5s
+      retries: 3          # Unhealthy after 3 failures
+      start_period: 10s   # Grace period during startup
     deploy:
-      replicas: 3
+      replicas: 3         # 3 replicas for high availability
+      # Rolling update — zero downtime via start-first order
       update_config:
-        parallelism: 1
-        delay: 15s
-        failure_action: rollback
-        monitor: 30s
-        order: start-first
+        parallelism: 1           # Update 1 at a time (safest)
+        delay: 15s               # Wait between updates
+        failure_action: rollback # Auto-rollback on failure
+        monitor: 30s             # Watch 30s before declaring success
+        order: start-first       # New starts before old stops = zero downtime
       rollback_config:
         parallelism: 1
         delay: 5s
         order: start-first
       placement:
         preferences:
-          - spread: node.id
+          - spread: node.id      # Distribute across all nodes
       resources:
         limits:   { cpus: "0.50", memory: 512M }
         reservations: { cpus: "0.25", memory: 256M }
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"
-        - "traefik.http.routers.frontend.entrypoints=web"
-        - "traefik.http.routers.frontend.priority=1"
-        - "traefik.http.services.frontend.loadbalancer.server.port=80"
+        - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"          # Match all paths
+        - "traefik.http.routers.frontend.entrypoints=web"               # HTTP port 80
+        - "traefik.http.routers.frontend.priority=1"                    # Lowest — /api matches first
+        - "traefik.http.services.frontend.loadbalancer.server.port=80"  # nginx port
     logging:
       driver: json-file
-      options: { max-size: "10m", max-file: "3" }
+      options:
+        max-size: "10m"    # Rotate at 10MB
+        max-file: "3"      # Keep 3 files (30MB max)
 
+  # ===========================================================================
+  # BACKEND — API Service (Task 1.2 Deep Dive)
+  # ===========================================================================
+  # Mode: replicated (fixed count) vs global (one per node)
+  #   We use replicated for precise scaling control
+  #
+  # Secrets mounted at /run/secrets/ as tmpfs (never on disk)
+  #   More secure than env vars (visible in docker inspect)
+  #
+  # Placeholder — replace with Express/Go/Python image in production
+  # ===========================================================================
   backend:
     image: nginx:alpine
-    secrets: [db_password, db_user, db_connection_string, api_key]
+    # --- SWARM SECRETS (Task 1.3) ---
+    secrets:
+      - db_password            # Mounted at /run/secrets/db_password
+      - db_user                # Mounted at /run/secrets/db_user
+      - db_connection_string   # Mounted at /run/secrets/db_connection_string
+      - api_key                # Mounted at /run/secrets/api_key
     environment:
       - NODE_ENV=production
-      - DB_HOST=postgres
+      - DB_HOST=postgres                          # Swarm DNS resolves service names
       - DB_PORT=5432
       - DB_NAME=appdb
       - REDIS_URL=redis://redis:6379
-      - DB_PASSWORD_FILE=/run/secrets/db_password
+      - DB_PASSWORD_FILE=/run/secrets/db_password  # App reads from file, not env
       - DB_USER_FILE=/run/secrets/db_user
-    networks: [public, frontend, backend]
+    networks:
+      - public       # Traefik routes /api here
+      - frontend     # Accepts requests from frontend
+      - backend      # Talks to PostgreSQL and Redis
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:80"]
-      interval: 10s
+      interval: 10s       # Faster checks for API service
       timeout: 5s
       retries: 3
       start_period: 10s
     deploy:
       mode: replicated
       replicas: 3
+      # --- UPDATE CONFIG ---
+      # parallelism: 2      = update 2 per batch (faster with 3 replicas)
+      # delay: 10s           = pause between batches
+      # failure_action:      = rollback on failure (vs pause or continue)
+      # monitor: 30s         = watch new task 30s before success
+      # max_failure_ratio:   = tolerate 25% failures before aborting
+      # order: start-first   = zero downtime (new before old)
       update_config:
         parallelism: 2
         delay: 10s
@@ -96,66 +163,101 @@ services:
         monitor: 30s
         max_failure_ratio: 0.25
         order: start-first
+      # --- ROLLBACK CONFIG ---
+      # failure_action: pause = if rollback fails, stop for investigation
       rollback_config:
         parallelism: 2
         delay: 5s
         failure_action: pause
         order: start-first
+      # --- PLACEMENT ---
       placement:
         preferences:
-          - spread: node.id
-        constraints: [node.role == worker]
+          - spread: node.id           # Spread across nodes
+        constraints:
+          - node.role == worker       # Keep manager lean
+      # --- RESOURCES ---
       resources:
-        limits:   { cpus: "1.0", memory: 512M }
-        reservations: { cpus: "0.25", memory: 128M }
+        limits:   { cpus: "1.0", memory: 512M }       # Hard ceiling
+        reservations: { cpus: "0.25", memory: 128M }   # Guaranteed minimum
+      # --- RESTART POLICY ---
       restart_policy:
-        condition: on-failure
+        condition: on-failure    # Only restart on error, not manual stop
         delay: 5s
         max_attempts: 5
-        window: 120s
+        window: 120s             # Reset counter after 2 minutes
+      # --- TRAEFIK LABELS ---
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.backend.rule=PathPrefix(`/api`)"
+        - "traefik.http.routers.backend.rule=PathPrefix(`/api`)"          # Route /api/*
         - "traefik.http.routers.backend.entrypoints=web"
-        - "traefik.http.routers.backend.priority=10"
+        - "traefik.http.routers.backend.priority=10"                      # Higher than frontend (1)
         - "traefik.http.services.backend.loadbalancer.server.port=80"
+        # Sticky sessions — same user hits same backend instance
         - "traefik.http.services.backend.loadbalancer.sticky.cookie=true"
         - "traefik.http.services.backend.loadbalancer.sticky.cookie.name=backend_affinity"
-        - "traefik.http.middlewares.api-rate.rateLimit.average=100"
-        - "traefik.http.middlewares.api-rate.rateLimit.burst=50"
+        # Rate limiting — protect against abuse
+        - "traefik.http.middlewares.api-rate.rateLimit.average=100"        # 100 req/s
+        - "traefik.http.middlewares.api-rate.rateLimit.burst=50"           # 50 burst
         - "traefik.http.routers.backend.middlewares=api-rate"
     logging:
       driver: json-file
-      options: { max-size: "10m", max-file: "5" }
+      options:
+        max-size: "10m"
+        max-file: "5"      # More files for API debugging
 
+  # ===========================================================================
+  # POSTGRESQL — Database (pinned to labeled node)
+  # ===========================================================================
+  # Single replica pinned via node.labels.type == db constraint.
+  # Why? Swarm volumes are node-local. Without pinning, rescheduling
+  # to another node = empty volume = DATA LOSS.
+  # In production: use managed DB (AWS RDS) instead.
+  # ===========================================================================
   postgres:
-    image: postgres:15-alpine
-    secrets: [db_password, db_user]
+    image: postgres:15-alpine    # Alpine = ~80MB vs ~380MB Debian
+    secrets:
+      - db_password
+      - db_user
     environment:
+      # Postgres reads _FILE suffix natively (built-in feature)
       - POSTGRES_PASSWORD_FILE=/run/secrets/db_password
       - POSTGRES_USER_FILE=/run/secrets/db_user
       - POSTGRES_DB=appdb
-    volumes: [postgres-data:/var/lib/postgresql/data]
-    networks: [backend]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data   # Persistent named volume
+    networks:
+      - backend    # ONLY backend — not reachable from public or frontend
+      # Defense-in-depth: compromised frontend cannot reach database
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$(cat /run/secrets/db_user) -d appdb"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 5           # More retries — DB is slow to initialize
+      start_period: 30s    # Postgres first-time setup takes time
     deploy:
-      replicas: 1
+      replicas: 1          # Never replicate without proper replication (Patroni)
       placement:
-        constraints: [node.labels.type == db]
+        constraints:
+          - node.labels.type == db   # Pin to worker1 (labeled in Step 19)
       resources:
         limits:   { cpus: "1.0", memory: 1G }
         reservations: { cpus: "0.50", memory: 512M }
 
+  # ===========================================================================
+  # REDIS — In-Memory Cache
+  # ===========================================================================
+  # Cache is ephemeral — data can be regenerated. Single replica is fine.
+  # appendonly=yes persists data to survive container restart.
+  # ===========================================================================
   redis:
     image: redis:7-alpine
     command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --appendonly yes
-    volumes: [redis-data:/data]
-    networks: [backend]
+    # --maxmemory-policy allkeys-lru = evict least-recently-used when full
+    volumes:
+      - redis-data:/data
+    networks:
+      - backend    # Only accessible from backend services
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -164,15 +266,25 @@ services:
     deploy:
       replicas: 1
       placement:
-        constraints: [node.role == worker]
+        constraints:
+          - node.role == worker
       resources:
-        limits:   { cpus: "0.50", memory: 256M }
+        limits: { cpus: "0.50", memory: 256M }
 
+# =============================================================================
+# NETWORKS — Multi-tier isolation
+# =============================================================================
+# public   = Traefik + externally routed services
+# frontend = Frontend <-> Backend only
+# backend  = Backend <-> Database/Cache only (DB isolated here)
+# monitor  = Prometheus/Grafana (created externally)
+# All encrypted with IPSec for data-in-transit protection
+# =============================================================================
 networks:
   public:
     driver: overlay
     driver_opts: { encrypted: "true" }
-    attachable: true
+    attachable: true        # Allow standalone containers for debugging
   frontend:
     driver: overlay
     driver_opts: { encrypted: "true" }
@@ -182,12 +294,25 @@ networks:
   monitor:
     driver: overlay
     driver_opts: { encrypted: "true" }
-    external: true
+    external: true          # Created separately before deploy
 
+# =============================================================================
+# VOLUMES — Persistent data storage
+# =============================================================================
+# Swarm volumes are NODE-LOCAL — this is why Postgres is pinned.
+# In production: use EBS, EFS, or managed database instead.
+# =============================================================================
 volumes:
   postgres-data:
   redis-data:
 
+# =============================================================================
+# SECRETS — Encrypted credential storage
+# =============================================================================
+# Stored encrypted in Swarm Raft log, mounted as tmpfs at /run/secrets/
+# Create before deploy: ./scripts/create-secrets.sh
+# Rotate without downtime: ./scripts/rotate-secrets.sh <name> <value>
+# =============================================================================
 secrets:
   db_password:          { external: true }
   db_user:              { external: true }
