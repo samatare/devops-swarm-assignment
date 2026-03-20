@@ -1,0 +1,19 @@
+groups:
+  - name: swarm-alerts
+    rules:
+      - alert: HighMemoryUsage
+        expr: (container_memory_usage_bytes / container_spec_memory_limit_bytes) * 100 > 90
+        for: 5m
+        labels: { severity: warning }
+      - alert: NodeDown
+        expr: up{job="node-exporter"} == 0
+        for: 1m
+        labels: { severity: critical }
+      - alert: HighContainerRestarts
+        expr: increase(container_restart_count[1h]) > 5
+        for: 5m
+        labels: { severity: warning }
+      - alert: HighNodeCPU
+        expr: 100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 5m
+        labels: { severity: warning }

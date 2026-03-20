@@ -1,0 +1,13 @@
+
+ - Swarm secrets for all credentials (not env vars)
+ - Secrets as tmpfs files at /run/secrets/
+ - Encrypted overlay networks
+ - Multi-tier network segmentation
+ - Database isolated on backend network only
+ - Non-root users in Dockerfiles
+ -  CPU/memory limits on all services
+ -  Docker socket mounted read-only
+ - Image scanning with Trivy in CI/CD
+ - Docker Content Trust enabled
+ - Swarm join tokens rotated periodically
+ - Portainer RBAC configured

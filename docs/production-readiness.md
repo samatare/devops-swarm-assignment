@@ -1,0 +1,8 @@
+-  3+ manager nodes across availability zones
+- 3+ replicas for stateless services
+- Health checks on all services
+-  Logging with rotation
+-  Prometheus + Grafana monitoring
+-  Alert rules for critical conditions
+-  Daily Swarm state + DB backups
+-  Restore procedure tested quarterly

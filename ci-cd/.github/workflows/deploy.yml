@@ -1,0 +1,34 @@
+name: Build and Deploy
+on:
+  push: { branches: [main] }
+  workflow_dispatch:
+    inputs: { environment: { type: choice, options: [staging, production] } }
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    strategy: { matrix: { service: [frontend, backend] } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: dockerfiles/${{ matrix.service }}.Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/portainer-deploy.sh deploy
+        env:
+          PORTAINER_URL: ${{ secrets.PORTAINER_URL }}
+          PORTAINER_USER: ${{ secrets.PORTAINER_USER }}
+          PORTAINER_PASSWORD: ${{ secrets.PORTAINER_PASSWORD }}
