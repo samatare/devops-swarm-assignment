@@ -40,6 +40,13 @@ services:
       - "--providers.docker.network=app_public"                   # Route via public network
       # NOTE: Swarm prefixes network names: "public" becomes "app_public"
       - "--entryPoints.web.address=:80"                           # HTTP entrypoint
+      # --- SSL/TLS (disabled for demo — requires domain name, not raw IP) ---
+      # To enable HTTPS with Let's Encrypt, add:
+      #   - "--entryPoints.websecure.address=:443"
+      #   - "--certificatesResolvers.letsencrypt.acme.email=admin@example.com"
+      #   - "--certificatesResolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      #   - "--certificatesResolvers.letsencrypt.acme.httpChallenge.entryPoint=web"
+      # Then update router labels to use entrypoints=websecure and tls.certresolver=letsencrypt
       # SSL disabled — Let's Encrypt requires domain name, not raw IP
       - "--metrics.prometheus=true"                               # Expose /metrics
       - "--entryPoints.metrics.address=:8082"                     # Metrics port
